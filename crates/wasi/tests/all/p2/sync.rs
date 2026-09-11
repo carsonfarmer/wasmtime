@@ -478,3 +478,8 @@ fn file_stream_not_permitted(component_path: &str) {
 fn p2_clocks_zero_wait() {
     run(P2_CLOCKS_ZERO_WAIT_COMPONENT, |_| {}).unwrap()
 }
+
+#[test_log::test]
+fn p2_adapter_clocks() {
+    run(P2_ADAPTER_CLOCKS_COMPONENT, |_| {}).unwrap()
+}
