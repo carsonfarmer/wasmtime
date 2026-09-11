@@ -511,5 +511,10 @@ async fn p2_clocks_zero_wait() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn p2_adapter_clocks() {
-    run(P2_ADAPTER_CLOCKS_COMPONENT, |_| {}).await.unwrap()
+    run(P2_ADAPTER_CLOCKS_COMPONENT, |builder| {
+        builder.wall_clock(super::TickingClock::default());
+        builder.monotonic_clock(super::TickingClock::default());
+    })
+    .await
+    .unwrap()
 }

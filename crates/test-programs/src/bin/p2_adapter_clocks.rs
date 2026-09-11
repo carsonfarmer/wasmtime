@@ -18,7 +18,7 @@ fn main() {
             monotonic,
         );
         adapter_monotonic_clock_set_paused(false);
-        assert!(wasip1::clock_time_get(wasip1::CLOCKID_REALTIME, 0).unwrap() > 0);
-        assert!(wasip1::clock_time_get(wasip1::CLOCKID_MONOTONIC, 0).unwrap() >= monotonic);
+        assert!(wasip1::clock_time_get(wasip1::CLOCKID_REALTIME, 0).unwrap() > realtime);
+        assert!(wasip1::clock_time_get(wasip1::CLOCKID_MONOTONIC, 0).unwrap() > monotonic);
     }
 }
