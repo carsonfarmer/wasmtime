@@ -44,6 +44,7 @@ use wasmtime_environ::component::{
 pub use buffers::{ReadBuffer, VecBuffer, WriteBuffer};
 
 mod buffers;
+mod copy;
 
 /// Enum for distinguishing between a stream or future in functions that handle
 /// both.
@@ -2196,6 +2197,8 @@ struct TransmitState {
     /// checked against a guest's whenever the host lowers the read end into
     /// that guest, and which `{Future,Stream}Any` use as their initial type.
     pub(super) origin: TransmitOrigin,
+    /// How to copy this stream's payload, once it's been needed.
+    copy_plan: Option<Arc<copy::Plan>>,
 }
 
 #[derive(Copy, Clone)]
@@ -2216,6 +2219,7 @@ impl TransmitState {
             read: ReadState::Open,
             write: WriteState::Open,
             done: false,
+            copy_plan: None,
             origin,
         }
     }
@@ -3397,6 +3401,15 @@ impl Instance {
         let write_types = write_component.types();
         let read_types = read_component.types();
         let count = count.as_usize();
+        let utf8 = |c: &crate::component::Component, o: OptionsIndex| {
+            c.env_component().options[o].string_encoding
+                == wasmtime_environ::component::StringEncoding::Utf8
+        };
+        let direct = utf8(write_component, write_options)
+            && utf8(read_component, read_options)
+            && write_ty
+                .payload(write_types)
+                .is_some_and(|ty| copy::supported(write_types, *ty));
 
         // Validate `write_ty` w.r.t. `write_address` to ensure it's properly
         // aligned and in-bounds.
@@ -3536,6 +3549,25 @@ impl Instance {
                             src.copy_to_nonoverlapping(dst, write_length_in_bytes);
                         }
                     }
+                } else if direct {
+                    let state = store.concurrent_state_mut_without_forcing_current_thread();
+                    let handle = state.get_mut(TableId::<TransmitHandle>::new(rep))?.state;
+                    let plan = (state.get_mut(handle)?.copy_plan)
+                        .get_or_insert_with(|| {
+                            Arc::new(copy::Plan::new(write_types, *write_payload_ty))
+                        })
+                        .clone();
+                    let size = usize::try_from(write_abi.size32)?;
+                    let store_opaque = store.store_opaque_mut();
+                    let lift = &mut LiftContext::new(store_opaque, write_options, write_instance)?;
+                    let mut buf = copy::lift(lift, &plan, write_address, size, count)?;
+
+                    // Lowering may call the guest's realloc function; see below.
+                    let old_thread = store.set_thread(read_caller_thread)?;
+                    let lower =
+                        &mut LowerContext::new(store.as_context_mut(), read_options, read_instance);
+                    copy::lower(lower, &plan, size, count, &mut buf, 0, read_address)?;
+                    store.set_thread(old_thread)?;
                 } else {
                     let store_opaque = store.store_opaque_mut();
                     let lift = &mut LiftContext::new(store_opaque, write_options, write_instance)?;
