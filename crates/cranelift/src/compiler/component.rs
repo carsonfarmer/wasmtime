@@ -857,7 +857,7 @@ impl<'a> TrampolineCompiler<'a> {
     /// payload by lifting and lowering with a simple `memcpy`.
     ///
     /// Any type containing only "flat", primitive data for which all bit
-    /// patterns are valid (i.e. no pointers, handles, bools, or chars) should
+    /// patterns are valid (i.e. no pointers, handles, bools, chars, or padding) should
     /// qualify for this optimization, but it's also okay to conservatively
     /// return `None` here; the fallback slow path will always work -- it just
     /// won't be as efficient.
@@ -865,22 +865,29 @@ impl<'a> TrampolineCompiler<'a> {
         let payload = self.types[self.types[ty].ty].payload;
         match payload {
             None => Some(&CanonicalAbiInfo::ZERO),
-            Some(
-                // Note that we exclude `Bool` and `Char` from this list because
-                // not all bit patterns are valid for those types.
-                payload @ (InterfaceType::S8
-                | InterfaceType::U8
-                | InterfaceType::S16
-                | InterfaceType::U16
-                | InterfaceType::S32
-                | InterfaceType::U32
-                | InterfaceType::S64
-                | InterfaceType::U64
-                | InterfaceType::Float32
-                | InterfaceType::Float64),
-            ) => Some(self.types.canonical_abi(&payload)),
-            // TODO: Recursively check for other "flat" types (i.e. those without pointers or handles),
-            // e.g. `record`s, `variant`s, etc. which contain only flat types.
+            Some(payload) => Some(self.types.canonical_abi(&payload))
+                .filter(|abi| self.flat_size(payload) == Some(abi.size32)),
+        }
+    }
+
+    /// The total size of the numbers making up `ty`, or `None` if it holds
+    /// anything else. This is less than `ty`'s size when `ty` has padding,
+    /// which must not be copied since lowering a value leaves it untouched.
+    fn flat_size(&self, ty: InterfaceType) -> Option<u32> {
+        let types = self.types;
+        match ty {
+            InterfaceType::S8
+            | InterfaceType::U8
+            | InterfaceType::S16
+            | InterfaceType::U16
+            | InterfaceType::S32
+            | InterfaceType::U32
+            | InterfaceType::S64
+            | InterfaceType::U64
+            | InterfaceType::Float32
+            | InterfaceType::Float64 => Some(types.canonical_abi(&ty).size32),
+            InterfaceType::Record(r) => types[r].fields.iter().map(|f| self.flat_size(f.ty)).sum(),
+            InterfaceType::Tuple(t) => types[t].types.iter().map(|t| self.flat_size(*t)).sum(),
             _ => None,
         }
     }
