@@ -6,10 +6,10 @@ use crate::component::resources::{HostResourceData, HostResourceIndex, HostResou
 use crate::component::store::ComponentTaskState;
 use crate::component::{Instance, ResourceType, RuntimeInstance};
 use crate::prelude::*;
-use crate::runtime::vm::VMFuncRef;
 use crate::runtime::vm::component::{
     ComponentInstance, HandleCounter, HandleTable, ResourceTables,
 };
+use crate::runtime::vm::{SendSyncPtr, VMFuncRef, VMMemoryDefinition};
 use crate::store::{StoreId, StoreOpaque};
 use alloc::sync::Arc;
 use core::fmt;
@@ -52,6 +52,10 @@ pub struct LowerContext<'a, T: 'static> {
 
     /// Whether to allow `options.realloc` to be used when lowering.
     allow_realloc: bool,
+
+    /// The memory being lowered into, looked up once since lowering a value
+    /// may access it many times.
+    memory: Option<SendSyncPtr<VMMemoryDefinition>>,
 }
 
 #[doc(hidden)]
@@ -69,12 +73,16 @@ impl<'a, T: 'static> LowerContext<'a, T> {
             store.0.validate_sync_call().unwrap();
         }
         let (component, store) = instance.component_and_store_mut(store.0);
+        let memory = instance
+            .options_memory_raw(store, options)
+            .map(SendSyncPtr::new);
         LowerContext {
             store: StoreContextMut(store),
             options,
             types: component.types(),
             instance,
             allow_realloc: true,
+            memory,
         }
     }
 
@@ -93,12 +101,16 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         instance: Instance,
     ) -> LowerContext<'a, T> {
         let (component, store) = instance.component_and_store_mut(store.0);
+        let memory = instance
+            .options_memory_raw(store, options)
+            .map(SendSyncPtr::new);
         LowerContext {
             store: StoreContextMut(store),
             options,
             types: component.types(),
             instance,
             allow_realloc: false,
+            memory,
         }
     }
 
@@ -129,7 +141,18 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     /// This will panic if memory has not been configured for this lowering
     /// (e.g. it wasn't present during the specification of canonical options).
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
-        self.instance.options_memory_mut(self.store.0, self.options)
+        self.instance.id().assert_belongs_to(self.store.0.id());
+        let Some(memory) = self.memory else {
+            return &mut [];
+        };
+        // SAFETY: `memory` was looked up in `self.store` (asserted above since
+        // that field is public), which keeps it alive and is borrowed for the
+        // life of the returned slice. Its base and length are reread each time
+        // since `realloc` may have grown it.
+        unsafe {
+            let memory = memory.as_ref();
+            core::slice::from_raw_parts_mut(memory.base.as_ptr(), memory.current_length())
+        }
     }
 
     /// Invokes the memory allocation function (which is style after `realloc`)
