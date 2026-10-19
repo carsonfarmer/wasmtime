@@ -458,7 +458,7 @@ impl Instance {
         &self.id.get(store).component().env_component().options[options]
     }
 
-    fn options_memory_raw(
+    pub(crate) fn options_memory_raw(
         &self,
         store: &StoreOpaque,
         options: OptionsIndex,
